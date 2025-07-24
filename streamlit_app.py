@@ -1,50 +1,75 @@
 import streamlit as st
 import numpy as np
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
-from PIL import Image
 import os
 import gdown
+from PIL import Image
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
-url = 'https://drive.google.com/uc?id=FILE_ID'
-output = 'best_resnet_model.h5'
-gdown.download(url, output, quiet=False)
+# Class labels
+class_labels = ["glioma", "meningioma", "no_tumor", "pituitary"]
 
-#Load Models
-@st.cache_resource(allow_output_mutation=True)
+# Load models with caching
+@st.cache_resource
 def load_models():
-    custom_model = load_model("custom_cnn_model.h5")
-    resnet_model = load_model("best_resnet_model.h5")
-    return custom_model, resnet_model
+    # Load Custom CNN
+    cnn_model = load_model("custom_cnn_model.h5")
 
-custom_model, resnet_model = load_models()
- 
-#Define Prediction Function
-def predict_tumor(img, model):
-    img = img.resize((224, 224))
-    img_array = image.img_to_array(img)
-    img_array = img_array / 255.0  # normalize
+    # Check if ResNet model exists, if not download from Google Drive
+    resnet_path = "best_resnet_model.h5"
+    if not os.path.exists(resnet_path):
+        # 🔁 Replace this with your Google Drive shareable file ID
+        file_id = "1EoL148o3_WQYt-eL2DxC7kopbZA6ZGGD"
+        gdown.download(f"https://drive.google.com/uc?id={file_id}", resnet_path, quiet=False)
+
+    resnet_model = load_model(resnet_path)
+    return cnn_model, resnet_model
+
+# Image preprocessing
+def preprocess_image(image, target_size=(224, 224)):
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image = image.resize(target_size)
+    img_array = np.array(image) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
-    prediction = model.predict(img_array)
-    class_index = np.argmax(prediction)
-    class_labels = ['glioma', 'meningioma', 'no_tumor', 'pituitary']
-    return class_labels[class_index], prediction[0][class_index]
+    return img_array
 
-#Streamlit UI
-st.set_page_config(page_title="Brain Tumor Classifier", layout="centered")
-st.title("🧠 Brain Tumor MRI Classifier")
+# Load both models
+cnn_model, resnet_model = load_models()
 
-uploaded_file = st.file_uploader("Upload an MRI Image", type=["jpg", "jpeg", "png"])
-model_choice = st.radio("Select Model to Use", ("Custom CNN", "ResNet50 Fine-Tuned"))
+# Streamlit UI
+st.set_page_config(page_title="Brain Tumor Classifier", page_icon="🧠")
+st.title("🧠 Brain Tumor Classification - Auto Model Selection")
 
-if uploaded_file is not None:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="Uploaded Image", use_column_width=True)
+st.write("Upload a brain MRI image. The app will use both models and select the better prediction automatically.")
+
+uploaded_file = st.file_uploader("📤 Upload an MRI Image", type=["jpg", "jpeg", "png"])
+
+if uploaded_file:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
     if st.button("Predict"):
-        if model_choice == "Custom CNN":
-            label, confidence = predict_tumor(img, custom_model)
-        else:
-            label, confidence = predict_tumor(img, resnet_model)
+        img = preprocess_image(image)
 
-        st.success(f"Prediction: **{label.upper()}** with confidence {confidence:.2f}")
+        # Predictions
+        cnn_pred = cnn_model.predict(img)
+        resnet_pred = resnet_model.predict(img)
+
+        # Confidence
+        cnn_conf = np.max(cnn_pred)
+        resnet_conf = np.max(resnet_pred)
+
+        # Choose better prediction
+        if cnn_conf >= resnet_conf:
+            final_pred = cnn_pred
+            model_used = "Custom CNN"
+        else:
+            final_pred = resnet_pred
+            model_used = "ResNet50 Fine-tuned"
+
+        pred_class = class_labels[np.argmax(final_pred)]
+        confidence = np.max(final_pred) * 100
+
+        st.success(f"🎯 Tumor Type: **{pred_class}**")
+        st.info(f"🤖 Model Used: **{model_used}** | Confidence: **{confidence:.2f}%**")
